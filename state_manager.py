@@ -142,12 +142,10 @@ def get_links_file_path():
     if env_path:
         return Path(env_path)
 
-    # BASE_DIR is dev/TelegramBots/memegen -> dev/mil4nde/links.json
-    mil4nde_path = BASE_DIR.parent.parent / "mil4nde" / "links.json"
-    if mil4nde_path.parent.exists():
-        return mil4nde_path
-
-    return BASE_DIR / "links.json"
+    # Keep links.json right next to messages.json so both are written to
+    # (and served from) the exact same directory the website reads from,
+    # regardless of the deployment path (WEBSITE_MESSAGES_JSON override, etc.).
+    return get_messages_file_path().parent / "links.json"
 
 def load_links_from_file():
     path = get_links_file_path()
