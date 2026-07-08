@@ -134,6 +134,48 @@ def delete_all_messages_from_file(chat_id):
             return False, 0
     return False, 0
 
+# Link management for the website footer (YouTube + extra link)
+DEFAULT_YOUTUBE_URL = "https://www.youtube.com/watch?v=7wIwJvyZPv0"
+
+def get_links_file_path():
+    env_path = os.getenv("WEBSITE_LINKS_JSON")
+    if env_path:
+        return Path(env_path)
+
+    # BASE_DIR is dev/TelegramBots/memegen -> dev/mil4nde/links.json
+    mil4nde_path = BASE_DIR.parent.parent / "mil4nde" / "links.json"
+    if mil4nde_path.parent.exists():
+        return mil4nde_path
+
+    return BASE_DIR / "links.json"
+
+def load_links_from_file():
+    path = get_links_file_path()
+    links = {"youtube": DEFAULT_YOUTUBE_URL, "extra": ""}
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    links.update({k: data.get(k, links[k]) for k in links})
+        except Exception as e:
+            print(f"Fehler beim Laden der Links: {e}")
+    return links
+
+def save_link_to_file(key, value):
+    """Sets a single link ('youtube' or 'extra') and persists it."""
+    path = get_links_file_path()
+    links = load_links_from_file()
+    links[key] = value
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(links, f, indent=4, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"Fehler beim Speichern des Links: {e}")
+        return False
+
 def clear_entire_message_file() -> bool:
     """Empties the messages.json file completely."""
     path = get_messages_file_path()

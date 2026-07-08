@@ -26,7 +26,9 @@ from state_manager import (
     get_messages_file_path,
     delete_last_message_from_file,
     delete_all_messages_from_file,
-    clear_entire_message_file
+    clear_entire_message_file,
+    load_links_from_file,
+    save_link_to_file
 )
 from meme_handler import get_available_templates, create_meme, is_video_file
 
@@ -42,6 +44,7 @@ def get_main_menu_keyboard():
     keyboard = [
         [KeyboardButton("Meme Generator"), KeyboardButton("Nachricht schreiben")],
         [KeyboardButton("Name ändern")],
+        [KeyboardButton("YouTube-Link ändern"), KeyboardButton("Zusatz-Link ändern")],
         [KeyboardButton("Letzte Nachricht löschen"), KeyboardButton("Alle meine Nachrichten löschen")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -76,6 +79,17 @@ class MessagesAPIHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 logger.error(f"Error serving messages: {e}")
                 self.wfile.write(b"[]")
+        elif self.path in ("/api/links", "/links.json"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            try:
+                links = load_links_from_file()
+                self.wfile.write(json.dumps(links, ensure_ascii=False).encode('utf-8'))
+            except Exception as e:
+                logger.error(f"Error serving links: {e}")
+                self.wfile.write(b"{}")
         else:
             self.send_response(404)
             self.end_headers()
@@ -120,6 +134,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Einträge werden automatisch unter dem Namen {saved_name} gespeichert.\n\n"
             "Name ändern\n"
             "Nutze /changename oder klicke auf den Button.\n\n"
+            "Links auf mil4n.de\n"
+            "Nutze /setyoutube <url> oder den Button, um den YouTube-Link zu ändern.\n"
+            "Nutze /setlink <url> oder den Button, um den Zusatz-Link daneben zu setzen "
+            "(/setlink - leert ihn wieder auf die Seite selbst).\n\n"
             "Abbrechen\n"
             "Nutze /cancel um eine laufende Aktion abzubrechen.",
             reply_markup=get_main_menu_keyboard()
@@ -324,6 +342,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("Kein aktives Template gefunden. Nutze `/memegen` von vorn.", reply_markup=get_main_menu_keyboard())
             
+    elif state == "waiting_for_youtube_url":
+        clear_user_state(chat_id)
+        url = text.strip()
+        if save_link_to_file("youtube", url):
+            await update.message.reply_text(
+                f"YouTube-Link auf mil4n.de aktualisiert!\n\n{url}",
+                reply_markup=get_main_menu_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                "Fehler beim Speichern des YouTube-Links.",
+                reply_markup=get_main_menu_keyboard()
+            )
+
+    elif state == "waiting_for_extra_url":
+        clear_user_state(chat_id)
+        await _save_extra_link(update, text.strip())
+
     elif state == "waiting_for_secret_msg":
         # Nachricht speichern unter dem bereits gesetzten Namen
         name = user_state.get("user_name", "Anonym")
@@ -348,6 +384,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         elif text == "Name ändern":
             await changename_command(update, context)
+            return
+        elif text == "YouTube-Link ändern":
+            await set_youtube_command(update, context)
+            return
+        elif text == "Zusatz-Link ändern":
+            await set_link_command(update, context)
             return
         elif text == "Letzte Nachricht löschen":
             await delete_last_message_command(update, context)
@@ -423,6 +465,76 @@ async def clear_all_messages_command(update: Update, context: ContextTypes.DEFAU
             reply_markup=get_main_menu_keyboard()
         )
 
+async def set_youtube_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ändert den YouTube-Link im Footer von mil4n.de."""
+    chat_id = update.effective_chat.id
+
+    if not context.args:
+        # Geführter Dialog (z.B. per Keyboard-Button ausgelöst)
+        current = load_links_from_file().get("youtube", "")
+        clear_user_state(chat_id)
+        update_user_state(chat_id, "state", "waiting_for_youtube_url")
+        await update.message.reply_text(
+            "Bitte sende mir den neuen YouTube-Link.\n\n"
+            f"Aktueller Link:\n{current}",
+            reply_markup=get_cancel_keyboard()
+        )
+        return
+
+    url = " ".join(context.args).strip()
+    if save_link_to_file("youtube", url):
+        await update.message.reply_text(
+            f"YouTube-Link auf mil4n.de aktualisiert!\n\n{url}",
+            reply_markup=get_main_menu_keyboard()
+        )
+    else:
+        await update.message.reply_text(
+            "Fehler beim Speichern des YouTube-Links.",
+            reply_markup=get_main_menu_keyboard()
+        )
+
+async def set_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ändert den zusätzlichen Link neben YouTube im Footer von mil4n.de.
+    Ohne Argument wird der Link geleert und verweist dann auf die Seite selbst."""
+    chat_id = update.effective_chat.id
+
+    if not context.args:
+        # Geführter Dialog (z.B. per Keyboard-Button ausgelöst)
+        current = load_links_from_file().get("extra", "")
+        clear_user_state(chat_id)
+        update_user_state(chat_id, "state", "waiting_for_extra_url")
+        await update.message.reply_text(
+            "Bitte sende mir den neuen Zusatz-Link.\n"
+            "Sende ein - um ihn zu leeren (verweist dann auf die Seite selbst).\n\n"
+            f"Aktueller Link:\n{current or '(leer)'}",
+            reply_markup=get_cancel_keyboard()
+        )
+        return
+
+    url = " ".join(context.args).strip()
+    await _save_extra_link(update, url)
+
+async def _save_extra_link(update: Update, url: str):
+    """Speichert den Zusatz-Link. '-' oder leer setzt ihn zurück auf die Seite selbst."""
+    if url == "-":
+        url = ""
+    if save_link_to_file("extra", url):
+        if url:
+            await update.message.reply_text(
+                f"Zusätzlicher Link auf mil4n.de aktualisiert!\n\n{url}",
+                reply_markup=get_main_menu_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                "Zusätzlicher Link geleert. Er verweist jetzt auf die Seite selbst.",
+                reply_markup=get_main_menu_keyboard()
+            )
+    else:
+        await update.message.reply_text(
+            "Fehler beim Speichern des Links.",
+            reply_markup=get_main_menu_keyboard()
+        )
+
 def run_hourly_cleanup():
     import time
     import datetime
@@ -476,6 +588,10 @@ def main():
     application.add_handler(CommandHandler('deleteallmessages', delete_all_messages_command))
     application.add_handler(CommandHandler('clearall', clear_all_messages_command))
     application.add_handler(CommandHandler('clearallmessages', clear_all_messages_command))
+    application.add_handler(CommandHandler('setyoutube', set_youtube_command))
+    application.add_handler(CommandHandler('youtube', set_youtube_command))
+    application.add_handler(CommandHandler('setlink', set_link_command))
+    application.add_handler(CommandHandler('link', set_link_command))
     
     # Callback query handler für das Inline-Meme-Menü
     application.add_handler(CallbackQueryHandler(handle_callback))
