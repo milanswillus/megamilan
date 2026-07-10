@@ -5,13 +5,12 @@ import http.server
 import socketserver
 import threading
 from pathlib import Path
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     filters
 )
 
@@ -23,14 +22,12 @@ from state_manager import (
     clear_user_state,
     load_messages_from_file,
     save_message_to_file,
-    get_messages_file_path,
     delete_last_message_from_file,
     delete_all_messages_from_file,
     clear_entire_message_file,
     load_links_from_file,
     save_link_to_file
 )
-from meme_handler import get_available_templates, create_meme, is_video_file
 
 # Enable logging
 logging.basicConfig(
@@ -42,7 +39,7 @@ logger = logging.getLogger(__name__)
 # --- KEYBOARD HELPERS ---
 def get_main_menu_keyboard():
     keyboard = [
-        [KeyboardButton("Meme Generator"), KeyboardButton("Nachricht schreiben")],
+        [KeyboardButton("Nachricht schreiben")],
         [KeyboardButton("Name ändern")],
         [KeyboardButton("YouTube-Link ändern"), KeyboardButton("Zusatz-Link ändern")],
         [KeyboardButton("Letzte Nachricht löschen"), KeyboardButton("Alle meine Nachrichten löschen")]
@@ -135,8 +132,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"Hallo {saved_name}! Ich bin dein multifunktionaler Bot.\n\n"
             "Folgende Features stehen dir zur Verfügung:\n\n"
-            "Meme Generator\n"
-            "Nutze /memegen oder klicke unten auf den Button.\n\n"
             "Nachricht schreiben\n"
             "Nutze /message <deine Nachricht> oder klicke unten auf den Button.\n"
             f"Einträge werden automatisch unter dem Namen {saved_name} gespeichert.\n\n"
@@ -173,7 +168,7 @@ async def changename_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Bricht die aktuelle Aktion (Meme-Erstellung oder Secret-Nachricht) ab."""
+    """Bricht die aktuelle Aktion (Secret-Nachricht etc.) ab."""
     chat_id = update.effective_chat.id
     user_state = get_user_state(chat_id)
     state = user_state.get("state")
@@ -183,50 +178,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Aktion abgebrochen.", reply_markup=get_main_menu_keyboard())
     else:
         await update.message.reply_text("Keine aktive Aktion vorhanden.", reply_markup=get_main_menu_keyboard())
-
-async def memegen_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Zeigt das Menü zur Auswahl des Meme-Templates an."""
-    templates = get_available_templates()
-    if not templates:
-        await update.message.reply_text("Keine Templates im `templates/` Ordner gefunden.")
-        return
-        
-    keyboard = []
-    # Templates als Inline-Buttons auflisten
-    for key, info in templates.items():
-        keyboard.append([InlineKeyboardButton(info["display_name"], callback_data=f"tpl:{key}")])
-        
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "Wähle ein Meme-Template aus:",
-        reply_markup=reply_markup
-    )
-
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Verarbeitet die Auswahl des Meme-Templates per Inline-Button."""
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    
-    if data.startswith("tpl:"):
-        template_key = data.split(":", 1)[1]
-        chat_id = update.effective_chat.id
-        
-        # Zustand setzen
-        clear_user_state(chat_id)
-        update_user_state(chat_id, "active_template", template_key)
-        update_user_state(chat_id, "state", "waiting_for_meme_text")
-        
-        await query.edit_message_text(
-            text=f"Template <b>{template_key.replace('_', ' ').title()}</b> ausgewählt.",
-            parse_mode="HTML"
-        )
-        # Tastatur unten auf "Abbrechen" ändern und nach Text fragen
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="Sende mir jetzt den Text für das Meme als normale Nachricht:",
-            reply_markup=get_cancel_keyboard()
-        )
 
 async def message_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Startet das Eintragen einer Nachricht mit dem gespeicherten Namen."""
@@ -268,48 +219,6 @@ async def message_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_cancel_keyboard()
     )
 
-async def generate_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE, template_key: str, text: str):
-    """Generiert das Meme und schickt es zurück."""
-    chat_id = update.effective_chat.id
-    status_msg = await update.message.reply_text("Generiere Meme... Bitte warten")
-    
-    try:
-        output_file = create_meme(template_key, text)
-        if not output_file or not output_file.exists():
-            await status_msg.edit_text("Fehler beim Generieren des Memes.")
-            await context.bot.send_message(chat_id=chat_id, text="Wähle eine Aktion aus:", reply_markup=get_main_menu_keyboard())
-            return
-            
-        # Datei senden und Hauptmenü wieder anzeigen
-        if is_video_file(output_file):
-            with open(output_file, 'rb') as f:
-                await context.bot.send_video(
-                    chat_id=chat_id,
-                    video=f,
-                    caption=f"Meme: {text}",
-                    reply_markup=get_main_menu_keyboard()
-                )
-        else:
-            with open(output_file, 'rb') as f:
-                await context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=f,
-                    caption=f"Meme: {text}",
-                    reply_markup=get_main_menu_keyboard()
-                )
-                
-        # Statusmeldung löschen
-        await context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
-        
-        # Lokale Datei löschen
-        if output_file.exists():
-            os.remove(output_file)
-            
-    except Exception as e:
-        logger.error(f"Fehler beim Senden des Memes: {e}", exc_info=True)
-        await status_msg.edit_text("Ein Fehler ist aufgetreten.")
-        await context.bot.send_message(chat_id=chat_id, text="Wähle eine Aktion aus:", reply_markup=get_main_menu_keyboard())
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Verarbeitet eingehende Textnachrichten basierend auf dem aktuellen State."""
     chat_id = update.effective_chat.id
@@ -342,14 +251,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_menu_keyboard()
         )
         
-    elif state == "waiting_for_meme_text":
-        active_template = user_state.get("active_template")
-        clear_user_state(chat_id)
-        if active_template:
-            await generate_and_send(update, context, active_template, text)
-        else:
-            await update.message.reply_text("Kein aktives Template gefunden. Nutze `/memegen` von vorn.", reply_markup=get_main_menu_keyboard())
-            
     elif state == "waiting_for_youtube_url":
         clear_user_state(chat_id)
         url = normalize_url(text)
@@ -384,10 +285,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
     else:
         # Falls kein aktiver Dialog läuft, prüfen wir ob einer der Menü-Buttons geklickt wurde:
-        if text == "Meme Generator":
-            await memegen_menu(update, context)
-            return
-        elif text == "Nachricht schreiben":
+        if text == "Nachricht schreiben":
             await message_command(update, context)
             return
         elif text == "Name ändern":
@@ -588,9 +486,6 @@ def main():
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('help', start))
     application.add_handler(CommandHandler('cancel', cancel))
-    application.add_handler(CommandHandler('memegen', memegen_menu))
-    application.add_handler(CommandHandler('templates', memegen_menu))
-    application.add_handler(CommandHandler('list', memegen_menu))
     application.add_handler(CommandHandler('message', message_command))
     application.add_handler(CommandHandler('secret', message_command))
     application.add_handler(CommandHandler('changename', changename_command))
@@ -603,9 +498,6 @@ def main():
     application.add_handler(CommandHandler('setlink', set_link_command))
     application.add_handler(CommandHandler('link', set_link_command))
     
-    # Callback query handler für das Inline-Meme-Menü
-    application.add_handler(CallbackQueryHandler(handle_callback))
-    
     # Fallback-Nachrichten-Handler für Texteingaben
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
@@ -615,4 +507,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

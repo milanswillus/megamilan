@@ -42,24 +42,12 @@ def clear_user_state(chat_id):
             states[chat_id_str]["user_name"] = user_name
         save_states(states)
 
-# Compatibility wrappers for old template handling
-def get_active_template(chat_id):
-    return get_user_state(chat_id).get("active_template")
-
-def set_active_template(chat_id, template_key):
-    update_user_state(chat_id, "active_template", template_key)
-
-def clear_active_template(chat_id):
-    update_user_state(chat_id, "active_template", None)
-
 # Message management for the secret website tab
 def get_messages_file_path():
     env_path = os.getenv("WEBSITE_MESSAGES_JSON")
     if env_path:
         return Path(env_path)
     
-    # BASE_DIR is dev/TelegramBots/memegen
-    # BASE_DIR.parent.parent is dev/
     mil4nde_path = BASE_DIR.parent.parent / "mil4nde" / "messages.json"
     if mil4nde_path.parent.exists():
         return mil4nde_path
@@ -142,9 +130,6 @@ def get_links_file_path():
     if env_path:
         return Path(env_path)
 
-    # Keep links.json right next to messages.json so both are written to
-    # (and served from) the exact same directory the website reads from,
-    # regardless of the deployment path (WEBSITE_MESSAGES_JSON override, etc.).
     return get_messages_file_path().parent / "links.json"
 
 def load_links_from_file():
@@ -184,4 +169,3 @@ def clear_entire_message_file() -> bool:
     except Exception as e:
         print(f"Fehler beim Leeren der Nachrichten-Datei: {e}")
         return False
-
